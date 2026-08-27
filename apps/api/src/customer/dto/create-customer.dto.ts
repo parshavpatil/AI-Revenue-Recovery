@@ -1,0 +1,2 @@
+import { IsBoolean, IsEmail, IsOptional, IsString } from 'class-validator';
+export class CreateCustomerDto { @IsString() name!:string; @IsOptional() @IsEmail() email?:string; @IsOptional() @IsString() phone?:string; @IsOptional() @IsString() externalCustomerId?:string; @IsOptional() @IsString() preferredLanguage?:string; @IsOptional() @IsBoolean() voiceOptIn?:boolean; @IsOptional() @IsBoolean() smsOptIn?:boolean; }

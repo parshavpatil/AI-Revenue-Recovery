@@ -1,0 +1,455 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum MerchantStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum PaymentStatus {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  DISPUTED
+  UNKNOWN
+}
+
+enum PaymentMethod {
+  CARD
+  UPI
+  NETBANKING
+  WALLET
+  EMI
+  OTHER
+}
+
+enum PaymentFailureCategory {
+  INSUFFICIENT_FUNDS
+  NETWORK
+  BANK_DECLINED
+  AUTHENTICATION
+  EXPIRED
+  INVALID_DETAILS
+  FRAUD_SUSPECTED
+  LIMIT_EXCEEDED
+  UNKNOWN
+}
+
+enum RecoveryCaseStatus {
+  OPEN
+  IN_PROGRESS
+  PROMISED
+  RECOVERED
+  EXPIRED
+  STOPPED
+  ESCALATED
+}
+
+enum RecoveryPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RecoveryActionType {
+  RETRY_PAYMENT
+  CREATE_PAYMENT_LINK
+  SEND_PAYMENT_LINK
+  VOICE_CALL
+  SEND_MESSAGE
+  WAIT
+  ESCALATE
+  STOP
+}
+
+enum RecoveryActionStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  QUEUED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum VoiceCallStatus {
+  QUEUED
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  NO_ANSWER
+  BUSY
+  CANCELLED
+}
+
+enum VoiceCallOutcome {
+  PAYMENT_LINK_REQUESTED
+  PAYMENT_INTENT
+  PROMISE_TO_PAY
+  CALLBACK_REQUESTED
+  NOT_INTERESTED
+  WRONG_NUMBER
+  OPT_OUT
+  OTHER
+}
+
+enum PromiseStatus {
+  PROMISED
+  PENDING
+  FULFILLED
+  BROKEN
+  EXPIRED
+  CANCELLED
+}
+
+enum AuditActorType {
+  SYSTEM
+  USER
+  AI_AGENT
+  WEBHOOK
+  WORKER
+}
+
+enum PolicyDecision {
+  ALLOW
+  DENY
+  REQUIRES_APPROVAL
+}
+
+model Merchant {
+  id                String         @id @default(cuid())
+  name              String
+  razorpayAccountId String?        @unique
+  status            MerchantStatus @default(ACTIVE)
+  timezone          String         @default("Asia/Kolkata")
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  users         User[]
+  customers     Customer[]
+  payments      Payment[]
+  recoveryCases RecoveryCase[]
+  policies      Policy[]
+  auditLogs     AuditLog[]
+  paymentLinks  PaymentLink[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model User {
+  id         String   @id @default(cuid())
+  merchantId String
+  email      String
+  name       String
+  role       UserRole @default(OPERATOR)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([merchantId, email])
+  @@index([merchantId, role])
+}
+
+model Customer {
+  id                 String         @id @default(cuid())
+  merchantId         String
+  externalCustomerId String?
+  name               String
+  email              String?
+  phone              String?
+  status             CustomerStatus @default(ACTIVE)
+  preferredLanguage  String?        @default("hinglish")
+  voiceOptIn         Boolean        @default(false)
+  smsOptIn           Boolean        @default(true)
+  doNotContact       Boolean        @default(false)
+  lifetimeValue      Decimal        @default(0) @db.Decimal(14, 2)
+  successfulPayments Int            @default(0)
+  failedPayments     Int            @default(0)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  merchant      Merchant       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  payments      Payment[]
+  recoveryCases RecoveryCase[]
+  voiceCalls    VoiceCall[]
+  promises      PromiseToPay[]
+  paymentLinks  PaymentLink[]
+
+  @@unique([merchantId, externalCustomerId])
+  @@index([merchantId, status])
+  @@index([merchantId, phone])
+}
+
+model Payment {
+  id                String                  @id @default(cuid())
+  merchantId        String
+  customerId        String?
+  razorpayPaymentId String?                 @unique
+  razorpayOrderId   String?
+  razorpayInvoiceId String?
+  amount            Decimal                 @db.Decimal(14, 2)
+  currency          String                  @default("INR")
+  status            PaymentStatus
+  method            PaymentMethod?
+  failureCategory   PaymentFailureCategory?
+  failureCode       String?
+  failureReason     String?
+  capturedAt        DateTime?
+  failedAt          DateTime?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  merchant      Merchant       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  customer      Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  events        PaymentEvent[]
+  recoveryCases RecoveryCase[]
+
+  @@index([merchantId, status])
+  @@index([customerId, status])
+  @@index([merchantId, failedAt])
+  @@index([razorpayOrderId])
+}
+
+model PaymentEvent {
+  id               String    @id @default(cuid())
+  paymentId        String?
+  razorpayEventId  String?   @unique
+  eventType        String
+  payload          Json
+  occurredAt       DateTime?
+  processedAt      DateTime?
+  processingStatus String    @default("RECEIVED")
+  processingError  String?
+  createdAt        DateTime  @default(now())
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([eventType, createdAt])
+  @@index([processingStatus, createdAt])
+}
+
+model RecoveryCase {
+  id                  String                  @id @default(cuid())
+  merchantId          String
+  customerId          String?
+  paymentId           String?
+  status              RecoveryCaseStatus      @default(OPEN)
+  priority            RecoveryPriority        @default(MEDIUM)
+  failureCategory     PaymentFailureCategory?
+  revenueAtRisk       Decimal                 @default(0) @db.Decimal(14, 2)
+  recoveryProbability Decimal                 @default(0) @db.Decimal(5, 4)
+  expectedRecovery    Decimal                 @default(0) @db.Decimal(14, 2)
+  attemptCount        Int                     @default(0)
+  lastAttemptAt       DateTime?
+  nextActionAt        DateTime?
+  recoveredAt         DateTime?
+  stoppedAt           DateTime?
+  stopReason          String?
+  aiSummary           String?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  merchant     Merchant         @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  customer     Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  payment      Payment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  actions      RecoveryAction[]
+  voiceCalls   VoiceCall[]
+  promises     PromiseToPay[]
+  auditLogs    AuditLog[]
+  paymentLinks PaymentLink[]
+
+  @@index([merchantId, status, priority])
+  @@index([customerId, status])
+  @@index([paymentId])
+  @@index([nextActionAt])
+}
+
+model RecoveryAction {
+  id             String               @id @default(cuid())
+  recoveryCaseId String
+  type           RecoveryActionType
+  status         RecoveryActionStatus @default(PROPOSED)
+  policyDecision PolicyDecision?
+  policyReason   String?
+  aiReason       String?
+  input          Json?
+  output         Json?
+  idempotencyKey String?              @unique
+  scheduledFor   DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  errorCode      String?
+  errorMessage   String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  recoveryCase RecoveryCase @relation(fields: [recoveryCaseId], references: [id], onDelete: Cascade)
+
+  @@index([recoveryCaseId, createdAt])
+  @@index([status, scheduledFor])
+  @@index([type, status])
+}
+
+model VoiceCall {
+  id              String            @id @default(cuid())
+  recoveryCaseId  String
+  customerId      String?
+  provider        String?
+  providerCallId  String?           @unique
+  phoneNumber     String?
+  language        String            @default("hinglish")
+  status          VoiceCallStatus   @default(QUEUED)
+  outcome         VoiceCallOutcome?
+  durationSeconds Int?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  summary         String?
+  sentiment       String?
+  confidence      Decimal?          @db.Decimal(5, 4)
+  failureReason   String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  recoveryCase RecoveryCase      @relation(fields: [recoveryCaseId], references: [id], onDelete: Cascade)
+  customer     Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  transcripts  VoiceTranscript[]
+
+  @@index([recoveryCaseId, createdAt])
+  @@index([customerId, createdAt])
+  @@index([status, createdAt])
+}
+
+model VoiceTranscript {
+  id          String   @id @default(cuid())
+  voiceCallId String
+  sequence    Int
+  speaker     String
+  text        String
+  language    String?
+  intent      String?
+  confidence  Decimal? @db.Decimal(5, 4)
+  createdAt   DateTime @default(now())
+
+  voiceCall VoiceCall @relation(fields: [voiceCallId], references: [id], onDelete: Cascade)
+
+  @@unique([voiceCallId, sequence])
+  @@index([voiceCallId, createdAt])
+}
+
+model PromiseToPay {
+  id             String        @id @default(cuid())
+  recoveryCaseId String
+  customerId     String?
+  voiceCallId    String?
+  promisedAmount Decimal       @db.Decimal(14, 2)
+  promisedAt     DateTime      @default(now())
+  promisedFor    DateTime?
+  status         PromiseStatus @default(PROMISED)
+  fulfilledAt    DateTime?
+  brokenAt       DateTime?
+  notes          String?
+  confidence     Decimal?      @db.Decimal(5, 4)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  recoveryCase RecoveryCase @relation(fields: [recoveryCaseId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([recoveryCaseId, status])
+  @@index([customerId, status])
+  @@index([promisedFor, status])
+}
+
+model PaymentLink {
+  id                    String    @id @default(cuid())
+  merchantId            String
+  recoveryCaseId        String?
+  customerId            String?
+  razorpayPaymentLinkId String    @unique
+  referenceId           String    @unique
+  shortUrl              String
+  amount                Decimal   @db.Decimal(14, 2)
+  currency              String    @default("INR")
+  status                String
+  expireBy              DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  merchant     Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  recoveryCase RecoveryCase? @relation(fields: [recoveryCaseId], references: [id], onDelete: SetNull)
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([merchantId, status])
+  @@index([recoveryCaseId, createdAt])
+  @@index([customerId, createdAt])
+}
+
+model Policy {
+  id               String   @id @default(cuid())
+  merchantId       String
+  name             String
+  description      String?
+  isActive         Boolean  @default(true)
+  maxRetryAttempts Int      @default(2)
+  maxVoiceAttempts Int      @default(2)
+  minRecoveryScore Decimal  @default(0.65) @db.Decimal(5, 4)
+  callingStartHour Int      @default(9)
+  callingEndHour   Int      @default(20)
+  config           Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId, isActive])
+}
+
+model AuditLog {
+  id             String          @id @default(cuid())
+  merchantId     String?
+  recoveryCaseId String?
+  actorType      AuditActorType
+  actorId        String?
+  action         String
+  resourceType   String
+  resourceId     String?
+  decision       PolicyDecision?
+  reason         String?
+  metadata       Json?
+  createdAt      DateTime        @default(now())
+
+  merchant     Merchant?     @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  recoveryCase RecoveryCase? @relation(fields: [recoveryCaseId], references: [id], onDelete: SetNull)
+
+  @@index([merchantId, createdAt])
+  @@index([recoveryCaseId, createdAt])
+  @@index([resourceType, resourceId])
+}
