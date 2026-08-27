@@ -1,4 +1,4 @@
-# RecoverAI Voice
+# AI Revenue Recovery
 
 Payment failure recovery + Hinglish voice reminder platform for the Razorpay AI Revenue Recovery buildathon track.
 
